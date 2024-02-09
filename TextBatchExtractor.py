@@ -14,6 +14,7 @@ Those two files will be saved in the same directory where the text files are loc
 import re
 import os
 import glob
+from string import printable
 import pandas as pd
 import tkinter as tk
 from tkinter.simpledialog import askstring
@@ -71,7 +72,7 @@ def keydata_agp(lines):
                 rest_of_line = rest_of_line.lstrip("           :   ")
                 poco = rest_of_line
 
-            # In some rare cases, POCO is written as POÇO
+            # In some rare cases, POCO is written as POÃ‡O
             if line.startswith(' PO\u00C7O'):
                 # Find the position where 'POCO' starts
                 start = line.find(' PO\u00C7O')
@@ -154,6 +155,51 @@ def keydata_dados(lines):
             end_date = rest_of_line
     return (poco, well_id, end_date, latitude, longitude)
 
+# This function will extract the key data from the directional drilling text files
+def keydata_direc(lines):
+    latitude_processed = False
+    poco = 'Not available'
+    well_id = 'Not available'
+    latitude = 'Not available'
+    longitude = 'Not available'
+    for line in lines:
+        # Extracts the well name
+        if line.startswith(' WELL NAME (Sigla Anp)        :   '):
+            start = line.find(' WELL NAME (Sigla Anp)        :   ')
+            rest_of_line = line[start + len(' WELL NAME (Sigla Anp)        :   '):].strip()
+            poco = rest_of_line
+            if poco == '':
+                poco = 'Not available'
+
+        # Extracts the well ID
+        if line.startswith(' CADASTRO ANP                 :      '):
+            start = line.find(' CADASTRO ANP                 :      ')
+            rest_of_line = line[start + len(' CADASTRO ANP                 :      '):].strip()
+            well_id = rest_of_line
+            if well_id == '':
+                well_id = 'Not available'
+
+        # Extracts the Latitude and Longitude
+
+        if line.startswith(('0', '1', '2', '3', '4', '5', '6', '7', '8', '9')) and not latitude_processed:
+            try:
+                line = ' '.join(line.split()[7:])
+                print(line)
+                # Split the rest of the line at the first space
+                latitude, rest_of_line = line.split(' ', 1)
+                # Remove the trailing spaces at the beginning of the rest_of_line
+                rest_of_line = rest_of_line.lstrip()
+                # Extract the longitude
+                longitude, rest_of_line = rest_of_line.split(' ', 1)
+                if latitude == '' or longitude == '':
+                    latitude = 'Not available'
+                    longitude = 'Not available'
+                latitude_processed = True
+            except ValueError:
+                latitude = 'Not available'
+                longitude = 'Not available'
+    return (poco, well_id, latitude, longitude)
+
 # This will transform a data string into a datetime object
 def custom_date_parser(date):
     try:
@@ -194,7 +240,7 @@ def create_agpdf():
                     new_row = pd.DataFrame({'Path': [file], 'POCO': [poco], 'Well ID': [well_id], 'End Date': [end_date], 'Latitude': [latitude], 'Longitude': [longitude]})
                     allmywells_df = pd.concat([allmywells_df, new_row], ignore_index=True)
     return allmywells_df
-allmywells_df = create_agpdf()
+# allmywells_df = create_agpdf()
 
 # Creates a dataframe to store the extracted DADOS well data
 def create_dadosdf():
@@ -212,14 +258,14 @@ def create_dadosdf():
                     new_row = pd.DataFrame({'Path': [file], 'POCO': [poco], 'Well ID': [well_id], 'End Date': [end_date], 'Latitude': [latitude], 'Longitude': [longitude]})
                     allmywells_df = pd.concat([allmywells_df, new_row], ignore_index=True)
     return allmywells_df
-allmywells_df = pd.concat([allmywells_df, create_dadosdf()])
+# allmywells_df = pd.concat([allmywells_df, create_dadosdf()])
 
-allmywells_df['End Date'] = allmywells_df['End Date'].apply(custom_date_parser)
-allmywells_df['End Date'] = pd.to_datetime(allmywells_df['End Date'])
-allmywells_df['Path'] = allmywells_df['Path'].str.replace('\\',' / / ', regex = False)
-allmywells_df['Path'] = allmywells_df['Path'].str.replace(myfiles_path, oilfield_name+' ', regex=False)
-file_path = os.path.join(myfiles_path, 'allwells_data.csv')
-allmywells_df.to_csv(file_path, index=False)
+# allmywells_df['End Date'] = allmywells_df['End Date'].apply(custom_date_parser)
+# allmywells_df['End Date'] = pd.to_datetime(allmywells_df['End Date'])
+# allmywells_df['Path'] = allmywells_df['Path'].str.replace('\\',' / / ', regex = False)
+# allmywells_df['Path'] = allmywells_df['Path'].str.replace(myfiles_path, oilfield_name+' ', regex=False)
+# file_path = os.path.join(myfiles_path, 'allwells_data.csv')
+# allmywells_df.to_csv(file_path, index=False)
 
 # This function finds the AGP folders that do not contain the right types of files
 def find_agpfolders_without_files(directory):
@@ -236,26 +282,54 @@ def find_agpfolders_without_files(directory):
             else:
                 for folder in folders:
                     f.write(folder + '\n')
-find_agpfolders_without_files(myfiles_path)
+# find_agpfolders_without_files(myfiles_path)
 
 # This function checks if each well file structure contains an AGP folder and gives the name of the wells that do not
+# For those that do not, check if they have at least the directional drilling data
+# If they do, copy the directional drilling data to a new folder and extract the key data from it
 def find_subfolders_without_AGP(directory):
     subfolders = []
+    reallybadsubfolder = []
+    allmyddonlywells_df = pd.DataFrame(columns=['Path', 'POCO', 'Well ID', 'Latitude', 'Longitude'])
     print('Now finding wells without AGP folders')
     for dirpath, dirnames, filenames in os.walk(directory):
          # Split the path into components
         path_parts = dirpath.split(os.sep)
-        ''' Replace the number below with 2 if you download the whole field data, 1 if you download the data from one category only'''
         if len(path_parts) - len(myfiles_path.split(os.sep)) == 2:
             # Check if 'AGP' is not in the directory names
             if 'AGP' not in dirnames:
                 subfolders.append(dirpath)
-        with open(os.path.join(myfiles_path, 'Missing_AGP_folders.txt'), 'w') as f:
-            if not subfolders:
-                f.write('All AGP folders contain the right types of files\n')
-            else:
-                for folder in subfolders:
-                    f.write(folder + '\n')
+                # Check if 'Dados Direcionais is also missing
+                if "Dados Direcionais" not in dirnames:
+                    reallybadsubfolder.append(dirpath)
+                else:
+                    files = os.listdir(os.path.join(dirpath, 'Dados Direcionais'))
+                    for file in files:
+                        if file.endswith('dados_direcionais.txt'):
+                            copy_file(os.path.join(dirpath, 'Dados Direcionais', file), oilfield_name + '_CopiedTXT')
+                            # Open the directional drilling text file
+                            with open(os.path.join(dirpath, 'Dados Direcionais', file), 'r') as my_file:
+                                print('Now processing file:', file)
+                                lines = my_file.readlines()
+                                poco, well_id, latitude, longitude = keydata_direc(lines)
+                                new_row = pd.DataFrame({'Path': [os.path.join(dirpath, 'Dados Direcionais', file)], 'POCO': [poco], 'Well ID': [well_id], 'Latitude': [latitude], 'Longitude': [longitude]})
+                                allmyddonlywells_df = pd.concat([allmyddonlywells_df, new_row], ignore_index=True)
+                                allmyddonlywells_df['Path'] = allmyddonlywells_df['Path'].str.replace('\\',' / / ', regex = False)
+                                allmyddonlywells_df['Path'] = allmyddonlywells_df['Path'].str.replace(myfiles_path, oilfield_name+' ', regex=False)
+    with open(os.path.join(myfiles_path, 'Missing_AGP_folders.txt'), 'w') as f:
+        if not subfolders:
+            f.write('All AGP folders contain the right types of files\n')
+        else:
+            for folder in subfolders:
+                f.write(folder + '\n')
+    with open(os.path.join(myfiles_path, 'Missing_AGP_folders_no_dados.txt'), 'w') as f:
+        if not reallybadsubfolder:
+            f.write('All wells without AGP folder contain a Dados Direcionais folder\n')
+        else:
+            for folder in reallybadsubfolder:
+                f.write(folder + '\n')
+    # Convert allmyddonlywells_df to a CSV file
+    allmyddonlywells_df.to_csv(os.path.join(myfiles_path, 'allmyddonlywells_data.csv'), index=False)
 find_subfolders_without_AGP(myfiles_path)
 
 # Creates the map of well, with markers colored by the date of abandonment split into 8 equal periods
@@ -323,4 +397,4 @@ def create_map():
     file_path = os.path.join(myfiles_path, 'map.html')
     m.save(file_path)
     webbrowser.open(file_path)
-create_map()
+# create_map()
